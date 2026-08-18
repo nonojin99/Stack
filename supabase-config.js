@@ -8,6 +8,6 @@
 //
 // 값을 비워 두면 온라인 랭킹 없이 브라우저(localStorage) 랭킹으로만 동작합니다.
 window.SUPABASE_CONFIG = {
-  url: "",
-  anonKey: "",
+  url: "https://fpjgjwazqpfiffnsgume.supabase.co",
+  anonKey: "sb_publishable_I1YgcnYNBOaGy0WwozO2wQ_PGwsLtU5",
 };
