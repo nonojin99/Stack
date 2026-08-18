@@ -175,6 +175,11 @@
     justify-content: center;
     color: var(--muted);
   }
+  #rank-src {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: -4px;
+  }
   #hud {
     position: absolute;
     top: 18px;
@@ -267,12 +272,14 @@
   <div id="rank-overlay" class="overlay hidden">
     <div class="card">
       <h2>🏆 랭킹 TOP 10</h2>
+      <div id="rank-src"></div>
       <ol id="rank-list"></ol>
       <button class="btn" id="btn-rank-close">닫기</button>
     </div>
   </div>
 </div>
 
+<script src="supabase-config.js"></script>
 <script>
 (() => {
   "use strict";
@@ -290,6 +297,36 @@
   const RANK_KEY = "stack-game-ranking-v1";
   const BEST_KEY = "stack-game-best-v1";
   const RANK_MAX = 10;
+  const GAME_MODE = "2d";
+
+  // ===== 온라인 랭킹 (Supabase REST) =====
+  const Remote = (() => {
+    const cfg = window.SUPABASE_CONFIG || {};
+    const enabled = !!(cfg.url && cfg.anonKey);
+    const headers = enabled ? {
+      apikey: cfg.anonKey,
+      Authorization: "Bearer " + cfg.anonKey,
+      "Content-Type": "application/json",
+    } : null;
+    async function fetchTop() {
+      const url = cfg.url.replace(/\/$/, "") +
+        "/rest/v1/rankings?mode=eq." + GAME_MODE +
+        "&select=name,score,created_at" +
+        "&order=score.desc,created_at.asc&limit=" + RANK_MAX;
+      const res = await fetch(url, { headers });
+      if (!res.ok) throw new Error("supabase " + res.status);
+      return res.json();
+    }
+    async function submit(name, sc) {
+      const res = await fetch(cfg.url.replace(/\/$/, "") + "/rest/v1/rankings", {
+        method: "POST",
+        headers: { ...headers, Prefer: "return=minimal" },
+        body: JSON.stringify({ name, score: sc, mode: GAME_MODE }),
+      });
+      if (!res.ok) throw new Error("supabase " + res.status);
+    }
+    return { enabled, fetchTop, submit };
+  })();
 
   // ===== 효과음 (Web Audio 합성, 외부 파일 없음) =====
   const SFX = (() => {
@@ -579,9 +616,29 @@
     list.sort((a, b) => b.score - a.score);
     localStorage.setItem(RANK_KEY, JSON.stringify(list.slice(0, RANK_MAX)));
   }
-  function renderRanking() {
-    const list = getRanking();
+  async function renderRanking() {
     const ol = $("rank-list");
+    const src = $("rank-src");
+    ol.innerHTML = '<li class="empty">불러오는 중...</li>';
+    src.textContent = "";
+
+    let list = null;
+    let online = false;
+    if (Remote.enabled) {
+      try {
+        list = (await Remote.fetchTop()).map((r) => ({
+          name: r.name,
+          score: r.score,
+          date: (r.created_at || "").slice(0, 10),
+        }));
+        online = true;
+      } catch { /* 서버 실패 시 로컬로 폴백 */ }
+    }
+    if (!list) list = getRanking();
+    src.textContent = Remote.enabled
+      ? (online ? "🌐 온라인 전체 랭킹" : "⚠️ 서버 연결 실패 — 내 브라우저 기록")
+      : "내 브라우저 기록 (오프라인)";
+
     ol.innerHTML = "";
     if (list.length === 0) {
       const li = document.createElement("li");
@@ -629,13 +686,23 @@
     if (!SFX.muted) SFX.ui();
   });
   renderMute();
-  $("btn-save").addEventListener("click", () => {
+  $("btn-save").addEventListener("click", async () => {
     if (savedThisRun) return;
+    savedThisRun = true;
     const name = $("name-input").value.trim() || "이름없음";
     localStorage.setItem("stack-game-name", name);
-    saveScore(name);
-    savedThisRun = true;
-    $("save-msg").textContent = "랭킹에 등록되었습니다!";
+    saveScore(name); // 로컬에는 항상 저장
+    if (Remote.enabled) {
+      $("save-msg").textContent = "등록 중...";
+      try {
+        await Remote.submit(name, score);
+        $("save-msg").textContent = "온라인 랭킹에 등록되었습니다!";
+      } catch {
+        $("save-msg").textContent = "서버 오류 — 이 브라우저에만 저장되었습니다";
+      }
+    } else {
+      $("save-msg").textContent = "랭킹에 등록되었습니다! (오프라인)";
+    }
   });
   $("name-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("btn-save").click();

@@ -20,7 +20,30 @@
 
 - 점수는 쌓아 올린 층수입니다.
 - 게임 오버 시 이름을 입력해 랭킹에 등록할 수 있습니다.
-- 랭킹은 브라우저 `localStorage`에 저장되며 TOP 10까지 집계됩니다.
+- 기본값은 브라우저 `localStorage` 저장(TOP 10)이며, Supabase를 연동하면 **모든 사용자가 공유하는 온라인 랭킹**으로 동작합니다.
+
+## Supabase 온라인 랭킹 연동 (선택)
+
+1. [supabase.com](https://supabase.com)에서 무료 프로젝트를 만듭니다.
+2. 대시보드 **SQL Editor**에서 [`supabase/schema.sql`](supabase/schema.sql) 내용을 붙여넣고 실행합니다.
+   - `rankings` 테이블이 생성되고, 누구나 조회/점수 등록만 가능하도록 RLS 정책이 설정됩니다 (수정·삭제 불가).
+3. 대시보드 **Settings > API**에서 두 값을 복사해 [`supabase-config.js`](supabase-config.js)에 채웁니다.
+
+   ```js
+   window.SUPABASE_CONFIG = {
+     url: "https://abcdefgh.supabase.co",  // Project URL
+     anonKey: "eyJhbGciOi...",             // anon public key
+   };
+   ```
+
+4. 배포하면 끝입니다. 랭킹 화면에 `🌐 온라인 전체 랭킹`으로 표시됩니다.
+
+동작 방식:
+
+- 별도 SDK 없이 Supabase REST API(PostgREST)를 `fetch`로 직접 호출합니다.
+- `anon` 키는 클라이언트 공개용 키이며, 서버 측 RLS 정책과 값 제약(이름 최대 10자, 점수 범위, 모드 값)으로 보호됩니다.
+- 설정이 비어 있거나 서버 연결에 실패하면 자동으로 로컬(localStorage) 랭킹으로 폴백합니다.
+- 3D와 2D 모드는 `mode` 컬럼으로 구분되어 각각 따로 집계됩니다.
 
 ## 실행
 
