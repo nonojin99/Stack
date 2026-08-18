@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>STACK! 3D - 박스 쌓기</title>
+<title>STACK! - 박스 쌓기</title>
 <style>
   :root {
     --bg: #10121a;
@@ -13,6 +13,7 @@
     --muted: #9aa0b4;
     --accent: #ffb703;
     --accent-2: #4cc9f0;
+    --danger: #ef476f;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -35,6 +36,7 @@
   }
   #game {
     display: block;
+    background: linear-gradient(#171a26 0%, #10121a 100%);
     border-radius: 12px;
     box-shadow: 0 12px 40px rgba(0,0,0,.5);
     cursor: pointer;
@@ -62,8 +64,8 @@
     box-shadow: 0 16px 48px rgba(0,0,0,.55);
   }
   .card h1 {
-    font-size: 38px;
-    letter-spacing: 3px;
+    font-size: 40px;
+    letter-spacing: 4px;
     color: var(--accent);
     margin-bottom: 6px;
   }
@@ -183,7 +185,7 @@
     z-index: 5;
   }
   #hud .score {
-    font-size: 46px;
+    font-size: 44px;
     font-weight: 800;
     text-shadow: 0 2px 10px rgba(0,0,0,.5);
   }
@@ -192,14 +194,6 @@
     color: var(--muted);
   }
   #hud.hidden { display: none; }
-  .mode-link {
-    display: block;
-    margin-top: 12px;
-    font-size: 12px;
-    color: var(--muted);
-    text-decoration: none;
-  }
-  .mode-link:hover { color: var(--accent-2); }
 </style>
 </head>
 <body>
@@ -214,9 +208,9 @@
   <!-- 시작 화면 -->
   <div id="start-overlay" class="overlay">
     <div class="card">
-      <h1>STACK! 3D</h1>
+      <h1>STACK!</h1>
       <p class="desc">
-        앞뒤·좌우 두 방향에서 번갈아 날아오는 박스를<br>
+        좌우에서 번갈아 날아오는 박스를<br>
         <b>클릭(터치)</b>으로 떨어뜨려 쌓아 올리세요.<br>
         아래 박스와 <b>겹친 만큼만</b> 쌓이고,<br>
         다음 박스는 그 크기로 날아옵니다.<br>
@@ -224,7 +218,6 @@
       </p>
       <button class="btn" id="btn-start">게임 시작</button>
       <button class="btn ghost" id="btn-rank-from-start">랭킹 보기</button>
-      <a class="mode-link" href="2d.html">2D 클래식 모드로 플레이 →</a>
     </div>
   </div>
 
@@ -259,30 +252,28 @@
   "use strict";
 
   // ===== 상수 =====
-  const VIEW_W = 480;
+  const VIEW_W = 480;          // 논리 캔버스 크기
   const VIEW_H = 640;
-  const BOX_H = 26;            // 한 층 높이 (월드 단위)
-  const BASE_SIZE = 150;       // 바닥 박스 한 변 크기
-  const BASE_SPEED = 3.0;      // 초기 이동 속도
-  const SPEED_STEP = 0.06;     // 층당 속도 증가
-  const MAX_SPEED = 8;
-  const MOVE_RANGE = 230;      // 왕복 이동 반경
-  const HOVER = BOX_H * 2.2;   // 이동 중 박스가 떠 있는 높이
-  const GRAVITY = 0.9;
-  const PERFECT_TOL = 6;       // 퍼펙트 판정 오차
-  const ISO_X = 0.866;         // cos30
-  const ISO_Y = 0.5;           // sin30
-  const RANK_KEY = "stack3d-game-ranking-v1";
-  const BEST_KEY = "stack3d-game-best-v1";
+  const BOX_H = 34;            // 박스 한 층 높이
+  const BASE_W = 220;          // 시작(바닥) 박스 너비
+  const BASE_SPEED = 2.6;      // 초기 이동 속도
+  const SPEED_STEP = 0.055;    // 층당 속도 증가
+  const MAX_SPEED = 7.5;
+  const GRAVITY = 0.65;        // 낙하 가속도
+  const PERFECT_TOL = 5;       // 이 오차 이하면 퍼펙트(자르지 않음)
+  const RANK_KEY = "stack-game-ranking-v1";
+  const BEST_KEY = "stack-game-best-v1";
   const RANK_MAX = 10;
 
   // ===== 캔버스 =====
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
+  let scale = 1;
 
   function resize() {
     const dpr = window.devicePixelRatio || 1;
     const fit = Math.min(window.innerWidth / VIEW_W, window.innerHeight / VIEW_H);
+    scale = fit;
     canvas.style.width = VIEW_W * fit + "px";
     canvas.style.height = VIEW_H * fit + "px";
     canvas.width = VIEW_W * fit * dpr;
@@ -304,39 +295,36 @@
   // ===== 게임 상태 =====
   // state: "idle" | "moving" | "dropping" | "gameover"
   let state = "idle";
-  // 쌓인 박스: {x, z, w, d, y, hue}  (x/z: 최소 모서리, w/d: x/z 크기, y: 바닥 높이)
-  let stack = [];
-  let mover = null;    // {x, z, w, d, y, axis: "x"|"z", dir, speed, hue}
-  let dropper = null;  // {x, z, w, d, y, vy, hue}
-  let debris = [];     // {x, z, w, d, y, vy, va, axis, hue, alpha}
+  let stack = [];       // 쌓인 박스 [{x, w, y, hue}] (y는 월드 좌표, 아래에서 위로)
+  let mover = null;     // 이동 중인 박스 {x, w, y, dir, speed, hue}
+  let dropper = null;   // 낙하 중인 박스 {x, w, y, vy, hue}
+  let debris = [];      // 잘려나간 조각 {x, w, y, vx, vy, rot, vr, hue, alpha}
   let score = 0;
-  let cameraY = 0;     // 탑 높이에 따른 화면 오프셋
+  let fromLeft = true;  // 다음 박스가 왼쪽에서 오는지
+  let cameraY = 0;      // 월드->화면 오프셋 (부드럽게 따라감)
   let cameraTarget = 0;
-  let flash = null;
-  let shake = 0;
+  let flash = null;     // {text, time} 퍼펙트 표시
+  let shake = 0;        // 화면 흔들림
   let savedThisRun = false;
 
-  const GROUND_Y = 470; // 월드 y=0, (x+z)=0 지점의 화면 y
+  const floorY = VIEW_H - 60; // 바닥 박스 윗면의 화면 기준 y (카메라 0일 때)
 
   function topBox() { return stack[stack.length - 1]; }
-  function towerTopY() { return stack.length * BOX_H; } // 탑 꼭대기 월드 높이
 
-  function hueFor(i) { return (i * 8) % 360; }
-
-  // 아이소메트릭 투영: 월드(px, pz, py) -> 화면 [sx, sy]
-  function P(px, pz, py) {
-    return [
-      VIEW_W / 2 + (px - pz) * ISO_X,
-      GROUND_Y + (px + pz) * ISO_Y - py + cameraY,
-    ];
+  function stackTopY() {
+    // 현재 쌓인 탑 꼭대기의 월드 y (박스 윗면)
+    return floorY - stack.length * BOX_H;
   }
 
+  function hueFor(i) { return (i * 9) % 360; }
+
   function reset() {
-    stack = [{ x: -BASE_SIZE / 2, z: -BASE_SIZE / 2, w: BASE_SIZE, d: BASE_SIZE, y: 0, hue: hueFor(0) }];
+    stack = [{ x: (VIEW_W - BASE_W) / 2, w: BASE_W, y: floorY - BOX_H, hue: hueFor(0) }];
     mover = null;
     dropper = null;
     debris = [];
     score = 0;
+    fromLeft = true;
     cameraY = 0;
     cameraTarget = 0;
     flash = null;
@@ -347,23 +335,17 @@
 
   function spawnMover() {
     const top = topBox();
-    const level = stack.length;
-    const axis = level % 2 === 1 ? "x" : "z"; // 층마다 이동축 교대
-    const speed = Math.min(BASE_SPEED + level * SPEED_STEP, MAX_SPEED);
-    const m = {
-      x: top.x, z: top.z, w: top.w, d: top.d,
-      y: towerTopY() + HOVER,
-      axis, speed, hue: hueFor(level),
+    const w = top.w;
+    const speed = Math.min(BASE_SPEED + stack.length * SPEED_STEP, MAX_SPEED);
+    mover = {
+      w,
+      x: fromLeft ? -w : VIEW_W,
+      y: stackTopY() - BOX_H,
+      dir: fromLeft ? 1 : -1,
+      speed,
+      hue: hueFor(stack.length),
     };
-    // 이동축 기준으로 탑 중심에서 -MOVE_RANGE 만큼 떨어진 곳에서 진입
-    if (axis === "x") {
-      m.x = top.x - MOVE_RANGE;
-      m.dir = 1;
-    } else {
-      m.z = top.z - MOVE_RANGE;
-      m.dir = 1;
-    }
-    mover = m;
+    fromLeft = !fromLeft;
     state = "moving";
   }
 
@@ -379,7 +361,7 @@
   // ===== 입력 =====
   function onAction() {
     if (state === "moving" && mover) {
-      dropper = { x: mover.x, z: mover.z, w: mover.w, d: mover.d, y: mover.y, vy: 0, hue: mover.hue, axis: mover.axis };
+      dropper = { x: mover.x, w: mover.w, y: mover.y, vy: 0, hue: mover.hue };
       mover = null;
       state = "dropping";
     }
@@ -394,72 +376,61 @@
   // ===== 판정 =====
   function landDropper() {
     const top = topBox();
-    const axis = dropper.axis;
-    const a0 = axis === "x" ? dropper.x : dropper.z;
-    const size = axis === "x" ? dropper.w : dropper.d;
-    const t0 = axis === "x" ? top.x : top.z;
-    const tSize = axis === "x" ? top.w : top.d;
-    const left = Math.max(a0, t0);
-    const right = Math.min(a0 + size, t0 + tSize);
+    const left = Math.max(dropper.x, top.x);
+    const right = Math.min(dropper.x + dropper.w, top.x + top.w);
     const overlap = right - left;
 
     if (overlap <= 0) {
-      // 교집합 없음 → 통째로 낙하하며 게임 오버
+      // 교집합 없음 → 통째로 떨어지며 게임 오버
       debris.push({
-        x: dropper.x, z: dropper.z, w: dropper.w, d: dropper.d,
-        y: dropper.y, vy: -1, va: a0 < t0 ? -2.5 : 2.5,
-        axis, hue: dropper.hue, alpha: 1,
+        x: dropper.x, w: dropper.w, y: dropper.y,
+        vx: dropper.x < top.x ? -2 : 2, vy: 2, rot: 0,
+        vr: dropper.x < top.x ? -0.06 : 0.06,
+        hue: dropper.hue, alpha: 1,
       });
       dropper = null;
       gameOver();
       return;
     }
 
-    const offset = a0 - t0;
-    let n0, nSize;
-    if (Math.abs(offset) <= PERFECT_TOL && Math.abs(size - tSize) <= PERFECT_TOL) {
-      // 퍼펙트: 자르지 않고 정렬
-      n0 = t0;
-      nSize = tSize;
+    const offset = dropper.x - top.x;
+    let newX, newW;
+    if (Math.abs(offset) <= PERFECT_TOL && Math.abs(dropper.w - top.w) <= PERFECT_TOL) {
+      // 퍼펙트: 자르지 않고 그대로 정렬
+      newX = top.x;
+      newW = top.w;
       flash = { text: "PERFECT!", time: 60 };
     } else {
-      n0 = left;
-      nSize = overlap;
-      // 잘려나간 조각
-      if (a0 < left) {
-        debris.push(makeDebris(axis, a0, left - a0, dropper, -2.5));
+      newX = left;
+      newW = overlap;
+      // 잘려나간 조각 생성
+      if (dropper.x < left) {
+        debris.push({
+          x: dropper.x, w: left - dropper.x, y: dropper.y,
+          vx: -2.2, vy: -1.5, rot: 0, vr: -0.08, hue: dropper.hue, alpha: 1,
+        });
       }
-      if (a0 + size > right) {
-        debris.push(makeDebris(axis, right, a0 + size - right, dropper, 2.5));
+      if (dropper.x + dropper.w > right) {
+        debris.push({
+          x: right, w: dropper.x + dropper.w - right, y: dropper.y,
+          vx: 2.2, vy: -1.5, rot: 0, vr: 0.08, hue: dropper.hue, alpha: 1,
+        });
       }
     }
 
-    const nb = { x: top.x, z: top.z, w: top.w, d: top.d, y: towerTopY(), hue: dropper.hue };
-    if (axis === "x") { nb.x = n0; nb.w = nSize; nb.z = dropper.z; nb.d = dropper.d; }
-    else { nb.z = n0; nb.d = nSize; nb.x = dropper.x; nb.w = dropper.w; }
-    stack.push(nb);
+    stack.push({ x: newX, w: newW, y: dropper.y, hue: dropper.hue });
     dropper = null;
-    score = stack.length - 1;
+    score = stack.length - 1; // 바닥 박스 제외
     updateHud();
     shake = 6;
 
-    // 카메라: 탑 꼭대기가 화면 45% 위로 올라가면 따라 올라감
-    const topScreen = GROUND_Y - towerTopY() + cameraTarget;
-    if (topScreen < VIEW_H * 0.42) {
-      cameraTarget = VIEW_H * 0.42 - GROUND_Y + towerTopY();
+    // 카메라: 탑이 높아지면 위로 스크롤
+    const topScreenY = stackTopY() - cameraTarget;
+    if (topScreenY < VIEW_H * 0.45) {
+      cameraTarget = stackTopY() - VIEW_H * 0.45;
     }
 
     spawnMover();
-  }
-
-  function makeDebris(axis, start, size, src, va) {
-    const d = {
-      x: src.x, z: src.z, w: src.w, d: src.d,
-      y: src.y, vy: 1.5, va, axis, hue: src.hue, alpha: 1,
-    };
-    if (axis === "x") { d.x = start; d.w = size; }
-    else { d.z = start; d.d = size; }
-    return d;
   }
 
   function gameOver() {
@@ -538,52 +509,48 @@
     if (e.key === "Enter") $("btn-save").click();
     e.stopPropagation();
   });
-  function openRank() {
+  function openRank(from) {
     renderRanking();
     rankOverlay.classList.remove("hidden");
+    rankOverlay.dataset.from = from;
   }
-  $("btn-rank-from-start").addEventListener("click", openRank);
-  $("btn-rank-from-over").addEventListener("click", openRank);
+  $("btn-rank-from-start").addEventListener("click", () => openRank("start"));
+  $("btn-rank-from-over").addEventListener("click", () => openRank("over"));
   $("btn-rank-close").addEventListener("click", () => {
     rankOverlay.classList.add("hidden");
   });
 
-  // ===== 업데이트 =====
+  // ===== 업데이트 & 렌더 =====
   function update() {
-    cameraY += (cameraTarget - cameraY) * 0.1;
+    // 카메라 부드럽게
+    cameraY += (cameraTarget - cameraY) * 0.12;
     if (shake > 0) shake *= 0.85;
 
     if (state === "moving" && mover) {
-      const top = topBox();
-      if (mover.axis === "x") {
-        mover.x += mover.dir * mover.speed;
-        if (mover.dir > 0 && mover.x > top.x + MOVE_RANGE) mover.dir = -1;
-        if (mover.dir < 0 && mover.x < top.x - MOVE_RANGE) mover.dir = 1;
-      } else {
-        mover.z += mover.dir * mover.speed;
-        if (mover.dir > 0 && mover.z > top.z + MOVE_RANGE) mover.dir = -1;
-        if (mover.dir < 0 && mover.z < top.z - MOVE_RANGE) mover.dir = 1;
-      }
+      mover.x += mover.dir * mover.speed;
+      // 화면 밖에서 반대편으로 반사 (핑퐁)
+      if (mover.dir > 0 && mover.x > VIEW_W - mover.w * 0.15) mover.dir = -1;
+      if (mover.dir < 0 && mover.x < -mover.w * 0.85) mover.dir = 1;
     }
 
     if (state === "dropping" && dropper) {
       dropper.vy += GRAVITY;
-      dropper.y -= dropper.vy;
-      const targetY = towerTopY();
-      if (dropper.y <= targetY) {
+      dropper.y += dropper.vy;
+      const targetY = stackTopY() - BOX_H;
+      if (dropper.y >= targetY) {
         dropper.y = targetY;
         landDropper();
       }
     }
 
     for (const d of debris) {
-      d.vy += GRAVITY * 0.6;
-      d.y -= d.vy;
-      if (d.axis === "x") d.x += d.va;
-      else d.z += d.va;
-      d.alpha -= 0.01;
+      d.vy += GRAVITY * 0.7;
+      d.x += d.vx;
+      d.y += d.vy;
+      d.rot += d.vr;
+      d.alpha -= 0.008;
     }
-    debris = debris.filter((d) => d.alpha > 0);
+    debris = debris.filter((d) => d.alpha > 0 && d.y - cameraY < VIEW_H + 200);
 
     if (flash) {
       flash.time--;
@@ -591,85 +558,64 @@
     }
   }
 
-  // ===== 렌더 =====
-  function face(points, fill) {
-    ctx.fillStyle = fill;
-    ctx.beginPath();
-    ctx.moveTo(points[0][0], points[0][1]);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  // 3D 박스 그리기 (윗면 + 오른쪽면(x+) + 왼쪽면(z+))
-  function drawBox(b, alpha = 1) {
-    const x0 = b.x, x1 = b.x + b.w;
-    const z0 = b.z, z1 = b.z + b.d;
-    const y0 = b.y, y1 = b.y + BOX_H;
-    // 화면 밖이면 스킵
-    const [, syTop] = P(x0, z0, y1);
-    const [, syBot] = P(x1, z1, y0);
-    if (syTop > VIEW_H + 60 || syBot < -60) return;
-
-    ctx.globalAlpha = Math.max(alpha, 0);
-    const h = b.hue;
-    // 윗면
-    face([P(x0, z0, y1), P(x1, z0, y1), P(x1, z1, y1), P(x0, z1, y1)],
-      "hsl(" + h + ", 62%, 64%)");
-    // 오른쪽면 (x = x1)
-    face([P(x1, z0, y1), P(x1, z1, y1), P(x1, z1, y0), P(x1, z0, y0)],
-      "hsl(" + h + ", 58%, 48%)");
-    // 왼쪽면 (z = z1)
-    face([P(x0, z1, y1), P(x1, z1, y1), P(x1, z1, y0), P(x0, z1, y0)],
-      "hsl(" + h + ", 55%, 36%)");
+  function drawBox(x, y, w, hue, alpha = 1) {
+    const sy = y - cameraY;
+    if (sy > VIEW_H + BOX_H || sy < -BOX_H * 2) return;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = "hsl(" + hue + ", 65%, 55%)";
+    ctx.fillRect(x, sy, w, BOX_H);
+    // 윗면 하이라이트 / 아랫면 그림자
+    ctx.fillStyle = "hsla(" + hue + ", 70%, 72%, .9)";
+    ctx.fillRect(x, sy, w, 5);
+    ctx.fillStyle = "rgba(0,0,0,.22)";
+    ctx.fillRect(x, sy + BOX_H - 5, w, 5);
     ctx.globalAlpha = 1;
   }
 
   function render() {
-    // 배경: 높이에 따라 서서히 색이 변하는 그라데이션
-    const bh = (210 + score * 3) % 360;
-    const grad = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    grad.addColorStop(0, "hsl(" + bh + ", 30%, 13%)");
-    grad.addColorStop(1, "hsl(" + ((bh + 40) % 360) + ", 25%, 7%)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-
+    ctx.clearRect(0, 0, VIEW_W, VIEW_H);
     ctx.save();
     if (shake > 0.3) {
       ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
     }
 
-    // 바닥 그림자 (탑 아래)
-    const base = stack[0];
-    if (base) {
-      const s = 30;
-      ctx.globalAlpha = 0.35;
-      face([
-        P(base.x - s, base.z - s, 0), P(base.x + base.w + s, base.z - s, 0),
-        P(base.x + base.w + s, base.z + base.d + s, 0), P(base.x - s, base.z + base.d + s, 0),
-      ], "#000");
+    // 바닥
+    const groundY = floorY - cameraY;
+    if (groundY < VIEW_H + 10) {
+      ctx.fillStyle = "#0b0d14";
+      ctx.fillRect(0, groundY, VIEW_W, VIEW_H - groundY + 10);
+      ctx.fillStyle = "#2c3147";
+      ctx.fillRect(0, groundY, VIEW_W, 3);
+    }
+
+    // 쌓인 박스
+    for (const b of stack) drawBox(b.x, b.y, b.w, b.hue);
+
+    // 이동/낙하 중 박스
+    if (mover) drawBox(mover.x, mover.y, mover.w, mover.hue);
+    if (dropper) drawBox(dropper.x, dropper.y, dropper.w, dropper.hue);
+
+    // 잘린 조각
+    for (const d of debris) {
+      ctx.save();
+      ctx.translate(d.x + d.w / 2, d.y - cameraY + BOX_H / 2);
+      ctx.rotate(d.rot);
+      ctx.globalAlpha = Math.max(d.alpha, 0);
+      ctx.fillStyle = "hsl(" + d.hue + ", 65%, 50%)";
+      ctx.fillRect(-d.w / 2, -BOX_H / 2, d.w, BOX_H);
+      ctx.restore();
       ctx.globalAlpha = 1;
     }
 
-    // 쌓인 박스 (아래→위)
-    for (const b of stack) drawBox(b);
-
-    // 잘린 조각
-    for (const d of debris) drawBox(d, d.alpha);
-
-    // 이동/낙하 중 박스
-    if (mover) drawBox(mover);
-    if (dropper) drawBox(dropper);
-
     // 퍼펙트 표시
     if (flash) {
-      const [fx, fy] = P(0, 0, towerTopY() + BOX_H * 3);
+      ctx.save();
       ctx.globalAlpha = Math.min(flash.time / 30, 1);
       ctx.fillStyle = "#ffd700";
       ctx.font = "800 30px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(flash.text, fx, fy);
-      ctx.globalAlpha = 1;
+      ctx.fillText(flash.text, VIEW_W / 2, stackTopY() - cameraY - 24);
+      ctx.restore();
     }
 
     ctx.restore();
@@ -685,21 +631,12 @@
 
   // 테스트/디버그용 훅 (게임 플레이에는 영향 없음)
   window.__stackTest = {
-    getState: () => {
-      const top = topBox();
-      return {
-        state,
-        score,
-        mover: mover ? {
-          axis: mover.axis,
-          m: mover.axis === "x" ? mover.x : mover.z,
-          size: mover.axis === "x" ? mover.w : mover.d,
-        } : null,
-        top: top ? {
-          x: top.x, z: top.z, w: top.w, d: top.d,
-        } : null,
-      };
-    },
+    getState: () => ({
+      state,
+      score,
+      mover: mover ? { x: mover.x, w: mover.w, dir: mover.dir } : null,
+      top: topBox() ? { x: topBox().x, w: topBox().w } : null,
+    }),
     drop: onAction,
   };
 })();
