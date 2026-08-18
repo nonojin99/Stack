@@ -194,11 +194,36 @@
     color: var(--muted);
   }
   #hud.hidden { display: none; }
+  #btn-mute {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    z-index: 20;
+    background: rgba(27,30,43,.8);
+    border: 1px solid #2c3147;
+    border-radius: 10px;
+    font-size: 18px;
+    line-height: 1;
+    padding: 9px 11px;
+    cursor: pointer;
+    color: var(--text);
+  }
+  #btn-mute:hover { border-color: var(--accent-2); }
+  .mode-link {
+    display: block;
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .mode-link:hover { color: var(--accent-2); }
 </style>
 </head>
 <body>
 <div id="wrap">
   <canvas id="game"></canvas>
+
+  <button id="btn-mute" title="효과음 켜기/끄기">🔊</button>
 
   <div id="hud" class="hidden">
     <div class="score" id="hud-score">0</div>
@@ -218,6 +243,7 @@
       </p>
       <button class="btn" id="btn-start">게임 시작</button>
       <button class="btn ghost" id="btn-rank-from-start">랭킹 보기</button>
+      <a class="mode-link" href="index.html">3D 모드로 플레이 →</a>
     </div>
   </div>
 
@@ -265,6 +291,84 @@
   const BEST_KEY = "stack-game-best-v1";
   const RANK_MAX = 10;
 
+  // ===== 효과음 (Web Audio 합성, 외부 파일 없음) =====
+  const SFX = (() => {
+    const MUTE_KEY = "stack-game-muted";
+    let actx = null;
+    let muted = localStorage.getItem(MUTE_KEY) === "1";
+    function ac() {
+      if (!actx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        actx = new AC();
+      }
+      if (actx.state === "suspended") actx.resume();
+      return actx;
+    }
+    function tone(freq, dur, opts = {}) {
+      const a = ac();
+      if (!a || muted) return;
+      const { type = "sine", vol = 0.25, freqEnd = freq, delay = 0 } = opts;
+      const t0 = a.currentTime + delay;
+      const osc = a.createOscillator();
+      const g = a.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t0);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(freqEnd, 1), t0 + dur);
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(vol, t0 + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      osc.connect(g).connect(a.destination);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.05);
+    }
+    function noise(dur, opts = {}) {
+      const a = ac();
+      if (!a || muted) return;
+      const { vol = 0.2, freq = 1200, delay = 0 } = opts;
+      const t0 = a.currentTime + delay;
+      const len = Math.max(1, Math.floor(a.sampleRate * dur));
+      const buf = a.createBuffer(1, len, a.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+      const src = a.createBufferSource();
+      src.buffer = buf;
+      const f = a.createBiquadFilter();
+      f.type = "lowpass";
+      f.frequency.value = freq;
+      const g = a.createGain();
+      g.gain.value = vol;
+      src.connect(f).connect(g).connect(a.destination);
+      src.start(t0);
+    }
+    return {
+      get muted() { return muted; },
+      toggle() {
+        muted = !muted;
+        localStorage.setItem(MUTE_KEY, muted ? "1" : "0");
+        return muted;
+      },
+      unlock() { ac(); },
+      drop() { noise(0.08, { vol: 0.1, freq: 900 }); },                     // 낙하 휙 소리
+      place() {                                                              // 착지 퉁 소리
+        tone(160, 0.12, { type: "triangle", vol: 0.35, freqEnd: 90 });
+        noise(0.06, { vol: 0.16, freq: 700 });
+      },
+      cut() { noise(0.16, { vol: 0.2, freq: 2600 }); },                      // 조각 잘리는 소리
+      perfect(streak) {                                                      // 퍼펙트: 연속마다 음정 상승
+        const base = 523.25 * Math.pow(2, Math.min(streak, 12) / 12);
+        tone(base, 0.18, { type: "sine", vol: 0.3 });
+        tone(base * 1.5, 0.22, { type: "sine", vol: 0.2, delay: 0.06 });
+      },
+      over() {                                                               // 게임 오버: 하강음
+        tone(330, 0.25, { type: "sawtooth", vol: 0.16, freqEnd: 220 });
+        tone(220, 0.3, { type: "sawtooth", vol: 0.16, freqEnd: 130, delay: 0.18 });
+        tone(147, 0.5, { type: "sawtooth", vol: 0.16, freqEnd: 80, delay: 0.38 });
+      },
+      ui() { tone(660, 0.06, { type: "square", vol: 0.07 }); },              // 버튼 클릭
+    };
+  })();
+
   // ===== 캔버스 =====
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
@@ -306,6 +410,7 @@
   let flash = null;     // {text, time} 퍼펙트 표시
   let shake = 0;        // 화면 흔들림
   let savedThisRun = false;
+  let perfectStreak = 0;
 
   const floorY = VIEW_H - 60; // 바닥 박스 윗면의 화면 기준 y (카메라 0일 때)
 
@@ -330,6 +435,7 @@
     flash = null;
     shake = 0;
     savedThisRun = false;
+    perfectStreak = 0;
     updateHud();
   }
 
@@ -364,6 +470,7 @@
       dropper = { x: mover.x, w: mover.w, y: mover.y, vy: 0, hue: mover.hue };
       mover = null;
       state = "dropping";
+      SFX.drop();
     }
   }
   canvas.addEventListener("pointerdown", onAction);
@@ -400,22 +507,30 @@
       newX = top.x;
       newW = top.w;
       flash = { text: "PERFECT!", time: 60 };
+      perfectStreak++;
+      SFX.perfect(perfectStreak);
     } else {
       newX = left;
       newW = overlap;
+      perfectStreak = 0;
+      SFX.place();
       // 잘려나간 조각 생성
+      let cutMade = false;
       if (dropper.x < left) {
         debris.push({
           x: dropper.x, w: left - dropper.x, y: dropper.y,
           vx: -2.2, vy: -1.5, rot: 0, vr: -0.08, hue: dropper.hue, alpha: 1,
         });
+        cutMade = true;
       }
       if (dropper.x + dropper.w > right) {
         debris.push({
           x: right, w: dropper.x + dropper.w - right, y: dropper.y,
           vx: 2.2, vy: -1.5, rot: 0, vr: 0.08, hue: dropper.hue, alpha: 1,
         });
+        cutMade = true;
       }
+      if (cutMade) SFX.cut();
     }
 
     stack.push({ x: newX, w: newW, y: dropper.y, hue: dropper.hue });
@@ -435,6 +550,7 @@
 
   function gameOver() {
     state = "gameover";
+    SFX.over();
     const best = Math.max(score, getBest());
     localStorage.setItem(BEST_KEY, String(best));
     $("final-score").textContent = score + "층";
@@ -495,8 +611,24 @@
   }
 
   // ===== 버튼 =====
-  $("btn-start").addEventListener("click", startGame);
-  $("btn-retry").addEventListener("click", startGame);
+  function startWithSound() {
+    SFX.unlock();
+    SFX.ui();
+    startGame();
+  }
+  $("btn-start").addEventListener("click", startWithSound);
+  $("btn-retry").addEventListener("click", startWithSound);
+
+  const muteBtn = $("btn-mute");
+  function renderMute() { muteBtn.textContent = SFX.muted ? "🔇" : "🔊"; }
+  muteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    SFX.unlock();
+    SFX.toggle();
+    renderMute();
+    if (!SFX.muted) SFX.ui();
+  });
+  renderMute();
   $("btn-save").addEventListener("click", () => {
     if (savedThisRun) return;
     const name = $("name-input").value.trim() || "이름없음";
