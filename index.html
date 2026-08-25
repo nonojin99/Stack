@@ -320,10 +320,11 @@
       return res.json();
     }
     async function submit(name, sc) {
-      const res = await fetch(cfg.url.replace(/\/$/, "") + "/rest/v1/rankings", {
+      // submit_score 함수: 같은 (mode, name)의 기존 점수보다 높을 때만 기록/갱신
+      const res = await fetch(cfg.url.replace(/\/$/, "") + "/rest/v1/rpc/submit_score", {
         method: "POST",
         headers: { ...headers, Prefer: "return=minimal" },
-        body: JSON.stringify({ name, score: sc, mode: GAME_MODE }),
+        body: JSON.stringify({ p_name: name, p_score: sc, p_mode: GAME_MODE }),
       });
       if (!res.ok) throw new Error("supabase " + res.status);
     }
@@ -631,8 +632,18 @@
     return parseInt(localStorage.getItem(BEST_KEY) || "0", 10) || 0;
   }
   function saveScore(name) {
+    // 이름당 최고 점수 한 건만 유지
     const list = getRanking();
-    list.push({ name, score, date: new Date().toISOString().slice(0, 10) });
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = list.find((r) => r.name === name);
+    if (existing) {
+      if (score > existing.score) {
+        existing.score = score;
+        existing.date = today;
+      }
+    } else {
+      list.push({ name, score, date: today });
+    }
     list.sort((a, b) => b.score - a.score);
     localStorage.setItem(RANK_KEY, JSON.stringify(list.slice(0, RANK_MAX)));
   }
