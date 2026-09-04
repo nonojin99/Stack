@@ -750,26 +750,27 @@
   });
 
   // ===== 업데이트 =====
-  function update() {
-    cameraY += (cameraTarget - cameraY) * 0.1;
-    if (shake > 0) shake *= 0.85;
+  // f: 60fps 기준 경과 프레임 수 (120Hz면 0.5, 30fps면 2) — 주사율과 무관하게 같은 속도 유지
+  function update(f) {
+    cameraY += (cameraTarget - cameraY) * (1 - Math.pow(0.9, f));
+    if (shake > 0) shake *= Math.pow(0.85, f);
 
     if (state === "moving" && mover) {
       const top = topBox();
       if (mover.axis === "x") {
-        mover.x += mover.dir * mover.speed;
+        mover.x += mover.dir * mover.speed * f;
         if (mover.dir > 0 && mover.x > top.x + MOVE_RANGE) mover.dir = -1;
         if (mover.dir < 0 && mover.x < top.x - MOVE_RANGE) mover.dir = 1;
       } else {
-        mover.z += mover.dir * mover.speed;
+        mover.z += mover.dir * mover.speed * f;
         if (mover.dir > 0 && mover.z > top.z + MOVE_RANGE) mover.dir = -1;
         if (mover.dir < 0 && mover.z < top.z - MOVE_RANGE) mover.dir = 1;
       }
     }
 
     if (state === "dropping" && dropper) {
-      dropper.vy += GRAVITY;
-      dropper.y -= dropper.vy;
+      dropper.vy += GRAVITY * f;
+      dropper.y -= dropper.vy * f;
       const targetY = towerTopY();
       if (dropper.y <= targetY) {
         dropper.y = targetY;
@@ -778,16 +779,16 @@
     }
 
     for (const d of debris) {
-      d.vy += GRAVITY * 0.6;
-      d.y -= d.vy;
-      if (d.axis === "x") d.x += d.va;
-      else d.z += d.va;
-      d.alpha -= 0.01;
+      d.vy += GRAVITY * 0.6 * f;
+      d.y -= d.vy * f;
+      if (d.axis === "x") d.x += d.va * f;
+      else d.z += d.va * f;
+      d.alpha -= 0.01 * f;
     }
     debris = debris.filter((d) => d.alpha > 0);
 
     if (flash) {
-      flash.time--;
+      flash.time -= f;
       if (flash.time <= 0) flash = null;
     }
   }
@@ -876,12 +877,17 @@
     ctx.restore();
   }
 
-  function loop() {
-    update();
+  let lastTime = 0;
+  function loop(now) {
+    if (!lastTime) lastTime = now;
+    // 탭 전환 등으로 간격이 크게 벌어지면 3프레임까지만 진행 (박스가 순간이동하는 것 방지)
+    const f = Math.min((now - lastTime) / (1000 / 60), 3);
+    lastTime = now;
+    update(f);
     render();
     requestAnimationFrame(loop);
   }
-  loop();
+  requestAnimationFrame(loop);
   updateHud();
 
   // 테스트/디버그용 훅 (게임 플레이에는 영향 없음)
